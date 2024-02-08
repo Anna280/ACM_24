@@ -1,0 +1,94 @@
+---
+title: "portfolio 1"
+output: html_document
+date: "2024-02-08"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Portfolio 1. Coding of anarchy agent (biased) and WSLS agent 
+ 
+
+```{r cars}
+# load packages and intialize settings
+pacman::p_load(tidyverse, patchwork)
+
+trials <- 120
+agents <- 100
+
+```
+
+## Initializing the anarchy agent (biased)
+
+```{r pressure, echo=FALSE}
+#
+handedness_bias <- 0.3 # setting a bias for choosing right hand (agent is more likely to choose left hand)
+
+right_hand_hate_agent <- rbinom(trials, 1, handedness_bias) # we simply sample randomly from a binomial
+
+# Now let's plot how it's choosing
+d1 <- tibble(trial = seq(trials), choice = right_hand_hate_agent)
+
+p1 <- ggplot(d1, aes(trial, as.factor(choice), color = choice)) + 
+  geom_point() + 
+  theme_classic() 
+p1
+
+```
+
+
+
+```{r}
+
+d1$cumulativerate <- cumsum(d1$choice) / seq_along(d1$choice)
+
+
+p4 <- ggplot(d1, aes(trial, cumulativerate)) + 
+  geom_line() + 
+  ylim(0,1) + 
+  theme_classic()
+
+p4
+```
+
+```{r}
+# Create dataframe with 100 agents running 125 trials (just choosing, not responding to input)
+d <- NULL
+for (x in 1:agents) { # looping through agents
+    
+    many_agents <- rbinom(trials, 1, handedness_bias) 
+    
+    temp <- tibble(trial = seq(trials), choice = many_agents, agent = x)
+    
+    temp$cumulativerate <- cumsum(temp$choice) / seq_along(temp$choice)
+
+    if (exists("d")) {
+      d <- rbind(d, temp)
+    } else{
+      d <- temp
+    }
+  }
+```
+
+
+
+```{r}
+p1 <- ggplot(d, aes(trial, cumulativerate, group = agent, color = agent)) + 
+  geom_line() + 
+  geom_hline(yintercept = 0.3, linetype = "dashed") + 
+  ylim(0,1) + 
+  theme_classic()
+p1
+```
+## Initializing the win-stay-lose-shift
+
+```{r}
+#Win-Stay-Lose-Shift
+```
+
+
+
+Note that the `echo = FALSE` parameter was
+added to the code chunk to prevent printing of the R code that generated the plot.
