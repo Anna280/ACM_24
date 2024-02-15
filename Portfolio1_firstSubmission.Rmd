@@ -1,0 +1,210 @@
+---
+title: "portfolio 1"
+output: html_document
+date: "2024-02-08"
+---
+
+## Portfolio 1. Coding of anarchy agent (biased) and WSLS agent 
+```{r}
+# load packages and intialize settings
+pacman::p_load(tidyverse, patchwork)
+
+trials <- 125
+agents <- 100
+```
+
+## Setting up the anarchy agent (biased)
+Note that,
+left = 0,
+right = 1.
+
+```{r}
+handedness_bias <- 0.3 # Setting a bias (agent is more likely to choose left hand)
+
+right_hand_hate_agent <- rbinom(trials, 1, handedness_bias) # we simply sample randomly from a binomial
+```
+
+```{r}
+d2 <- tibble(trial = seq(trials), choice = right_hand_hate_agent)
+d2$cumulativerate <- cumsum(d2$choice) / seq_along(d2$choice)
+d2$cumulativerate2 <- cumsum(d2$choice) / d2$trial
+
+p2 <- ggplot(d2, aes(trial, cumulativerate)) + 
+  geom_line() + 
+  ylim(0,1) + 
+  theme_classic() +
+  geom_hline(yintercept = 0.3, linetype = "dashed", color = "red")
+
+p2
+```
+
+```{r}
+# Create dataframe with 100 agents running 125 trials (just choosing, not responding to input)
+d3 <- NULL
+for (x in 1:agents) { # looping through agents
+    
+    many_agents <- rbinom(trials, 1, handedness_bias) 
+    
+    temp <- tibble(trial = seq(trials), choice = many_agents, agent = x)
+    
+    temp$cumulativerate <- cumsum(temp$choice) / seq_along(temp$choice)
+
+    if (exists("d3")) {
+      d3 <- rbind(d3, temp)
+    } else{
+      d3 <- temp
+    }
+  }
+```
+
+```{r}
+p3 <- ggplot(d3, aes(trial, cumulativerate, group = agent, color = agent)) + 
+  geom_line() + 
+  geom_hline(yintercept = 0.3, linetype = "dashed", color = "red") + 
+  ylim(0,1) + 
+  theme_classic()
+p3
+```
+
+## Initializing the win-stay-lose-shift
+
+```{r}
+# Win-Stay-Lose-Shift
+WSLS_agent_f <- function(prevChoice, feedback){
+  if (feedback == 1) {
+    choice = prevChoice
+  } else if (feedback == 0) {
+      choice = 1 - prevChoice
+      }
+  return(choice)
+}
+```
+
+```{r}
+# Set the WSLS up to play against a random agent
+self <- rep(NA, trials)
+self[1] <- rbinom(n = 1, size = 1, prob = 0.5) # first choice is random
+
+random <- 0.5
+other <- rbinom(trials, 1, random)
+```
+
+```{r}
+for (i in 2:trials) {
+  if (self[i - 1] == other[i - 1]) {
+    feedback = 1
+  } else {feedback = 0}
+  self[i] <- WSLS_agent_f(self[i - 1], feedback)
+}
+
+sum(self == other)
+```
+```{r}
+d4 <- tibble(self, other, trial = seq(trials), feedback = as.numeric(self == other))
+
+ggplot(d4) + theme_classic() +
+  geom_line(color = "red", aes(trial, self)) +
+  geom_line(color = "blue", aes(trial, other))
+```
+
+```{r}
+d4$cumulativerateSelf <- cumsum(d4$feedback) / seq_along(d4$feedback)
+d4$cumulativerateOther <- cumsum(1 - d4$feedback) / seq_along(d4$feedback)
+
+ggplot(d4) + theme_classic() +
+  geom_line(color = "red", aes(trial, cumulativerateSelf)) +
+  geom_line(color = "blue", aes(trial, cumulativerateOther))
+```
+
+
+```{r}
+### Make it into a function to repeat it 100 times
+success <- rep(NA, agents)
+for (j in 1:agents) {
+  self <- rep(NA, trials)
+  self[1] <- rbinom(n = 1, size = 1, prob = 0.5) # first choice is random
+  
+  random <- 0.5
+  other <- rbinom(trials, 1, random)
+  
+  for (i in 2:trials) {
+    if (self[i - 1] == other[i - 1]) {
+      feedback = 1
+      } else {feedback = 0}
+    self[i] <- WSLS_agent_f(self[i - 1], feedback)
+    }
+  
+  success[j] <- sum(self == other)
+  
+}
+
+selfRatio <- success/125
+plot(density(selfRatio))
+mean(selfRatio)
+sd(selfRatio)
+```
+
+# Set the WSLS up to play against a random agent with a bias
+```{r}
+self <- rep(NA, trials)
+self[1] <- rbinom(n = 1, size = 1, prob = 0.5) # first choice is random
+
+other <- rbinom(trials, 1, handedness_bias) # handedness = 0.3
+```
+
+
+```{r}
+for (i in 2:trials) {
+  if (self[i - 1] == other[i - 1]) {
+    feedback = 1
+  } else {feedback = 0}
+  self[i] <- WSLS_agent_f(self[i - 1], feedback)
+}
+
+sum(self == other)
+```
+
+```{r}
+d5 <- tibble(self, other, trial = seq(trials), feedback = as.numeric(self == other))
+
+ggplot(d5) + theme_classic() +
+  geom_line(color = "red", aes(trial, self)) +
+  geom_line(color = "blue", aes(trial, other))
+```
+
+```{r}
+d5$cumulativerateSelf <- cumsum(d5$feedback) / seq_along(d5$feedback)
+d5$cumulativerateOther <- cumsum(1 - d5$feedback) / seq_along(d5$feedback)
+
+ggplot(d5) + theme_classic() +
+  geom_line(color = "red", aes(trial, cumulativerateSelf)) +
+  geom_line(color = "blue", aes(trial, cumulativerateOther))
+```
+
+
+```{r}
+### Make it into a function to repeat it 100 times
+success <- rep(NA, agents)
+for (j in 1:agents) {
+  self <- rep(NA, trials)
+  self[1] <- rbinom(n = 1, size = 1, prob = 0.5) # first choice is random
+  
+  random <- 0.5
+  other <- rbinom(trials, 1, handedness_bias)
+  
+  for (i in 2:trials) {
+    if (self[i - 1] == other[i - 1]) {
+      feedback = 1
+      } else {feedback = 0}
+    self[i] <- WSLS_agent_f(self[i - 1], feedback)
+    }
+  
+  success[j] <- sum(self == other)
+  
+}
+
+selfRatio <- success/125
+plot(density(selfRatio))
+mean(selfRatio)
+sd(selfRatio)
+```
