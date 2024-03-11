@@ -1,0 +1,327 @@
+---
+title: "Newfile"
+author: "Sarah Hedvig Dahl Nielsen"
+date: "2024-03-08"
+output: html_document
+---
+
+```{r}
+pacman::p_load(tidyverse, boot, glue, gdata, cmdstanr, posterior)
+```
+
+```{r}
+### Define general conditions
+set.seed(1998)
+trials <- 200
+```
+
+### Define random agent function
+```{r}
+RandomAgentf <- function(input, rate){
+  n <- length(input)
+  choice <- rbinom(n, 1, rate)
+  return(choice)
+}
+```
+
+### Define imperfect memory agent function
+```{r}
+ImperfectMemoryAgentf <- function(Other, MemorySpan, Weight, Trials){ # weight ranges between 0 and 1.
+                                                                      # negatively correlated with noise.
+  Memory_choice <- rep(NA, Trials)
+  Memory_choice[1] <- RandomAgentf(1, 0.5)
+    
+  Self <- rep(NA, Trials)
+  Self[1] <- Memory_choice[1]
+  
+  for (i in 2:Trials) {
+    
+    history <- Other[1:i]
+    
+    if (length(history) < MemorySpan) {
+      
+      # similar to the commented structure below
+      choice <- round(mean(history))
+      choice_conv <- ifelse(choice == 0, -3, 3)
+      Memory_choice[i] <- choice_conv
+      rate <- choice_conv * Weight
+      bias <- inv.logit(rate)
+      Self[i] <- rbinom(1, 1, bias)
+      
+    } else {
+      
+      choice <- round(mean(tail(history, n = MemorySpan))) # Base choice on the n most recent choices of the opponent
+      #Memory_choice[i] <- choice
+      choice_conv <- ifelse(choice == 0, -3, 3) # scaling choice to log-odds space
+      Memory_choice[i] <- choice_conv
+      rate <-  choice_conv * Weight # apply noise to the scaled choices
+      bias <- inv.logit(rate) # scale back to probability space
+      Self[i] <- rbinom(1, 1, bias) # draw based on the noisy memory parameter = bias
+    }
+  }
+  return(list(noisy_choise = Self, memory_output= Memory_choice, trials=Trials))
+}
+```
+
+```{r}
+# Creating random player
+Other <- rep(NA, trials)
+bias <-  0.7
+Other <- RandomAgentf(seq(trials), bias)
+
+# Creating imperfect memory player 
+n = 5
+weights <- c(0.1, 0.3, 0.5, 0.7, 0.9)
+
+for (i in 1:length(weights)) {
+  self <- ImperfectMemoryAgentf(Other = Other, MemorySpan = n, Weight = weights[i], Trials = trials)
+  mv(from = "self", to = glue("Self_{i}"))
+}
+```
+
+```{r}
+# change your path to the stan model
+file <- file.path("neweststanfromanna.stan")
+mod <- cmdstan_model(file, cpp_options = list(stan_threads = TRUE),
+                     stanc_options = list("O1"))
+
+# The following command calls Stan with specific options.
+model_1 <- mod$sample(
+  data = Self_1,
+  seed = 123,
+  chains = 3,
+  parallel_chains = 2,
+  threads_per_chain = 2,
+  iter_warmup = 1000,
+  iter_sampling = 3000,
+  refresh = 0,
+  max_treedepth = 20,
+  adapt_delta = 0.99,
+)
+
+# The following command calls Stan with specific options.
+model_2 <- mod$sample(
+  data = Self_2,
+  seed = 123,
+  chains = 3,
+  parallel_chains = 2,
+  threads_per_chain = 2,
+  iter_warmup = 1000,
+  iter_sampling = 3000,
+  refresh = 0,
+  max_treedepth = 20,
+  adapt_delta = 0.99,
+)
+ 
+# The following command calls Stan with specific options.
+model_3 <- mod$sample(
+  data = Self_3,
+  seed = 123,
+  chains = 3,
+  parallel_chains = 2,
+  threads_per_chain = 2,
+  iter_warmup = 1000,
+  iter_sampling = 3000,
+  refresh = 0,
+  max_treedepth = 20,
+  adapt_delta = 0.99,
+)
+ 
+# The following command calls Stan with specific options.
+model_4 <- mod$sample(
+  data = Self_4,
+  seed = 123,
+  chains = 3,
+  parallel_chains = 2,
+  threads_per_chain = 2,
+  iter_warmup = 1000,
+  iter_sampling = 3000,
+  refresh = 0,
+  max_treedepth = 20,
+  adapt_delta = 0.99,
+)
+ 
+# The following command calls Stan with specific options.
+model_5 <- mod$sample( # One chain finished unexpectedly
+  data = Self_5,
+  seed = 123,
+  chains = 3,
+  parallel_chains = 2,
+  threads_per_chain = 2,
+  iter_warmup = 1000,
+  iter_sampling = 3000,
+  refresh = 0,
+  max_treedepth = 20,
+  adapt_delta = 0.99,
+)
+```
+
+```{r}
+model_1$summary()
+model_2$summary()
+model_3$summary()
+model_4$summary()
+model_5$summary()
+```
+
+```{r}
+draws1_df <- as_draws_df(model_1$draws())
+draws2_df <- as_draws_df(model_2$draws())
+draws3_df <- as_draws_df(model_3$draws())
+draws4_df <- as_draws_df(model_4$draws())
+draws5_df <- as_draws_df(model_5$draws())
+```
+
+
+```{r}
+# Plot Prior Predictive check
+prior_preds1 <- draws1_df %>% select(starts_with("prior_pred")) %>% rowSums()
+prior_preds1 <- data.frame(prior_preds1)
+
+ggplot(prior_preds1) +
+  geom_histogram(aes(prior_preds1), color = "blue", fill = "lightblue", alpha = 0.2, bins = 40) +
+  xlab("Predicted no. of Times the Right Hand is Chosen out of 200 Trials") +
+  ylab("Prior Density") +
+  theme_classic()
+```
+
+```{r}
+posterior_preds1 <- draws1_df %>% select(starts_with("post_pred")) %>% rowSums()
+posterior_preds2 <- draws2_df %>% select(starts_with("post_pred")) %>% rowSums()
+posterior_preds3 <- draws3_df %>% select(starts_with("post_pred")) %>% rowSums()
+posterior_preds4 <- draws4_df %>% select(starts_with("post_pred")) %>% rowSums()
+posterior_preds5 <- draws5_df %>% select(starts_with("post_pred")) %>% rowSums()
+
+post_pred_check <- data.frame(posterior_preds1, posterior_preds2, posterior_preds3, posterior_preds4, posterior_preds5)
+
+ggplot(post_pred_check) +
+  geom_histogram(aes(posterior_preds1), color = "orange", fill = "orange", alpha = 0.3, bins = 83) +
+  geom_histogram(aes(posterior_preds2), color = "yellow", fill = "lightyellow", alpha = 0.3, bins = 83) +
+  geom_histogram(aes(posterior_preds3), color = "green", fill = "lightgreen", alpha = 0.3, bins = 83) +
+  geom_histogram(aes(posterior_preds4), color = "blue", fill = "lightblue", alpha = 0.3, bins = 83) +
+  geom_histogram(aes(posterior_preds5), color = "purple", fill = "purple", alpha = 0.3, bins = 83) +
+  xlab("Predicted no. of Times the Right Hand is Chosen out of 200 Trials") +
+  ylab("Posterior Density") +
+  theme_classic()
+```
+
+
+
+```{r}
+# Now let's plot the density for bias (prior and posterior)
+ggplot(draws1_df) +
+  geom_density(aes(weight), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight_logit_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept =  0.1, size = 1) +
+  xlim(-3,3) +
+  xlab("weight 0.1") +
+  ylab("Prior and Posterior Density") +
+  theme_classic()
+```
+
+```{r}
+ggplot(draws2_df) +
+  geom_density(aes(weight), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight_logit_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept =  0.3, size = 1) +
+  xlim(-3,3) +
+  xlab("weight 0.3") +
+  ylab("Prior and Posterior Density") +
+  theme_classic()
+```
+
+```{r}
+ggplot(draws3_df) +
+  geom_density(aes(weight), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight_logit_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept =  0.5, size = 1) +
+  xlim(-3,3) +
+  xlab("weight 0.5") +
+  ylab("Prior and Posterior Density") +
+  theme_classic()
+```
+
+```{r}
+ggplot(draws4_df) +
+  geom_density(aes(weight), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight_logit_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept =  0.7, size = 1) +
+  xlim(-3,3) +
+  xlab("weight 0.7") +
+  ylab("Prior and Posterior Density") +
+  theme_classic()
+```
+
+```{r}
+ggplot(draws5_df) +
+  geom_density(aes(weight), fill = "blue", alpha = 0.3) +
+  geom_density(aes(weight_logit_prior), fill = "red", alpha = 0.3) +
+  geom_vline(xintercept =  0.9, size = 1) +
+  xlim(-3,3) +
+  xlab("weight 0.9") +
+  ylab("Prior and Posterior Density") +
+  theme_classic()
+```
+
+### Parameter recovery
+
+```{r}
+nparams <- 21 # number of parameters to recover
+trueWeight <- seq(0, 1, by = 0.05)
+inferredWeight <- rep(NA, n)
+infer_q5 <- rep(NA, n)
+infer_q95 <- rep(NA, n)
+
+for(i in 1:nparams){
+  
+  Other <- rep(NA, trials)
+  bias <-  0.7
+  Other <- RandomAgentf(seq(trials), bias)
+  
+  Self <- ImperfectMemoryAgentf(Other = Other, MemorySpan = n, Weight = trueWeight[i], Trials = trials)
+
+  samples <- mod$sample(
+    data = Self,
+    seed = 123,
+    chains = 3,
+    parallel_chains = 2,
+    threads_per_chain = 2,
+    iter_warmup = 1000,
+    iter_sampling = 3000,
+    refresh = 0,
+    max_treedepth = 20,
+    adapt_delta = 0.99
+  )
+
+  inferredWeight[i] <- mean(samples$draws(variables = "weight"))
+  
+  # Record credible interval
+  infer_q5[i] <- quantile2(samples$draws(variables = "weight"))[1]
+  infer_q95[i] <- quantile2(samples$draws(variables = "weight"))[2]
+}
+```
+
+```{r}
+df <- tibble(trueWeight, inferredWeight, infer_q5, infer_q95)
+
+recov_df %>% ggplot(aes(trueWeight, inferredWeight)) +
+  geom_point(color = "blue", size = 2) +
+  geom_errorbar(aes(ymin = infer_q5, ymax = infer_q95), width = 0) +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  theme_classic()
+```
+
+```{r}
+ggplot(df, aes(x = trueWeight,
+                       y = inferredWeight)) + #Setting aesthetics for plot
+    geom_point() + #Giving points a color each
+    #scale_linetype(name="perfect recovery") +
+    geom_abline(intercept=0, slope=1, linetype=2) +
+    geom_smooth(method = "lm", se = T, formula = "y ~ x") +
+    theme_minimal() + #Setting theme
+    #xlab(plot_lab[1]) + #Setting x label
+    #ylab(plot_lab[2]) + #Setting y label
+    labs(color = "") #+ #Setting legend title
+    #ggtitle(paste0("'", plot_lab[2], "' compared to '", plot_lab[1], "'"))
+```
+
