@@ -1,0 +1,369 @@
+---
+title: "Anna_iteration"
+output: html_document
+date: "2024-04-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(brms)
+library(tidyverse)
+library(cmdstanr)
+library(ggplot2)
+library(ggridges)
+```
+
+## implement 2 models (at least): simple Bayes vs weighted Bayes
+```{r}
+# Out first model, the simple bayes takes two sources of input and the bias. We wish to investigate the bias in relation to the new choice decisions. 
+
+SimpleBayes_f <- function(bias, Source1, Source2){
+
+  outcome <- inv_logit_scaled(bias + 0.5*logit_scaled(Source1) + 0.5*logit_scaled(Source2))
+  return(outcome)
+}
+
+# our second model is the weighted Bayes, which takes two weights as well. The weights makes the model more complex, and the decision making is now weighted by each of the different input sources.
+
+WeightedBayes_f <- function(bias, Source1, Source2, w1, w2){
+  
+  outcome <- inv_logit_scaled(bias + w1*logit_scaled(Source1) + w2*logit_scaled(Source2))
+  
+  return(outcome)
+  
+}
+```
+
+## simulate data from the model to assess whether the models can be fit
+```{r}
+# Function to generate the first number with higher probability for the middle numbers
+generate_FirstRating <- function(n) {
+  sample(1:8, size = n, replace = TRUE, prob = c(0.05, 0.1, 0.15, 0.2, 0.2, 0.15, 0.1, 0.05))
+}
+
+# Function to generate the second number based on the first
+generate_GroupRating <- function(FirstRating) {
+  options <- c(FirstRating, FirstRating + 2, FirstRating + 3, FirstRating - 2, FirstRating - 3)
+  valid_options <- options[options >= 1 & options <= 8]
+  sample(valid_options, size = 1)
+}
+
+# Generate data
+set.seed(123) # For reproducibility
+trials <- 100
+participants <- 1
+sim <- tibble()
+
+for (i in 1:participants) {
+  
+FirstRating <- generate_FirstRating(trials)
+
+i_sim <- data.frame(FirstRating = FirstRating) %>%
+  rowwise() %>%
+  mutate(GroupRating = generate_GroupRating(FirstRating)) %>% 
+  mutate(Feedback = GroupRating - FirstRating) %>% 
+  mutate(ID = i)
+
+############### HERE SIMULATE SECOND RATING ##################
+
+sim <- rbind(sim, i_sim)
+}
+
+sim = tibble(sim)
+sim <- sim %>%  mutate(across(c(FirstRating, GroupRating), function(x) (x/9)))
+# Display the first few rows of the dataframe
+head(sim)
+
+temp_c <- array(NA, trials)
+new_own_rating <-array(NA, trials)
+bias <-0.5
+
+
+for (i in 1:trials){
+  # get the choice2
+  temp_c[i] <- SimpleBayes_f(bias, sim$FirstRating[i], sim$GroupRating[i])
+  new_own_rating[i] <- ifelse(round(temp_c[i]*9,0) < 1, 1, 
+                   ifelse(round(temp_c[i]*9,0) > 8, 8, 
+                          round(temp_c[i]*9,0)))
+}
+```
+
+```{r}
+# prepare data for stan - simple bayes
+data_for_model<- list(
+  N = 100,
+  choice = new_own_rating,
+  Source1 = sim$FirstRating,
+  Source2 = sim$GroupRating
+)
+# feed R the stan model
+file <- file.path("simplebayes.stan")
+mod_simpleBayes <- cmdstan_model(file, cpp_options = list(stan_threads = TRUE),
+                     stanc_options = list("O1"))
+
+samples_simple <- mod_simpleBayes$sample(
+  data = data_for_model,
+  #fixed_param = TRUE,
+  seed = 123,
+  chains = 2,
+  parallel_chains = 2,
+  threads_per_chain = 2,
+  iter_warmup = 1500,
+  iter_sampling = 3000,
+  refresh = 500
+)
+# basic evaluation
+samples_simple$summary()
+samples_simple$loo()
+```
+
+```{r}
+draws_df <- as_draws_df(samples_simple$draws())
+ggplot(draws_df, aes(.iteration, bias, group = .chain, color = .chain)) +
+  geom_line(alpha = 0.5) +
+  theme_classic()
+ggplot(draws_df) +
+  geom_density(aes(bias), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(bias_prior), alpha = 0.6, fill = "pink") +
+  geom_vline(xintercept = bias) +
+  theme_bw()
+
+ggplot(draws_df) +
+  geom_density(aes(sd), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(sd_prior), alpha = 0.6, fill = "pink") +
+  theme_bw()
+```
+
+```{r}
+temp_weighted <- array(NA, trials)
+new_own_rating_weighted <-array(NA, trials)
+w1 <-0.3
+w2 <-0.7
+bias <- 0.4
+for (i in 1:trials){
+  # get the choice2
+  temp_weighted[i] <- WeightedBayes_f(bias, sim$FirstRating[i], sim$GroupRating[i], w1, w2)
+  
+  new_own_rating_weighted[i] <- ifelse(round(temp_weighted[i]*9,0) < 1, 1, 
+                 ifelse(round(temp_weighted[i]*9,0) > 8, 8, 
+                        round(temp_weighted[i]*9,0)))
+}
+```
+
+```{r}
+# prepare data for stan - weighted bayes
+data_for_model_weight <- list(
+  N = nrow(sim),
+  choice = new_own_rating_weighted,
+  Source1 = sim$FirstRating,
+  Source2 = sim$GroupRating
+)
+# feed R the stan model
+file_weight <- file.path("weighted_bayes.stan")
+mod_weightBayes <- cmdstan_model(file_weight, cpp_options = list(stan_threads = TRUE),
+                     stanc_options = list("O1"))
+
+samples_simple_weight <- mod_weightBayes$sample(
+  data = data_for_model_weight,
+  #fixed_param = TRUE,
+  seed = 123,
+  chains = 2,
+  parallel_chains = 2,
+  threads_per_chain = 2,
+  iter_warmup = 1500,
+  iter_sampling = 3000,
+  refresh = 500
+)
+# basic evaluation
+samples_simple_weight$summary()
+```
+
+```{r}
+draws_df <- as_draws_df(samples_simple_weight$draws())
+
+ggplot(draws_df, aes(.iteration, bias, group = .chain, color = .chain)) +
+  geom_line(alpha = 0.5) +
+  theme_classic()
+ggplot(draws_df) +
+  geom_density(aes(bias), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(bias_prior), alpha = 0.6, fill = "pink") +
+  geom_vline(xintercept = 0.4) +
+  theme_bw()
+
+ggplot(draws_df) +
+  theme_classic()+
+  geom_density(aes(sd), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(sd_prior), alpha = 0.6, fill = "pink") +
+  theme_bw()
+
+ggplot(draws_df) +
+  theme_classic()+
+  geom_density(aes(w1), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(w1_prior), alpha = 0.6, fill = "pink") +
+  geom_vline(xintercept = w1)
+  theme_bw()
+
+ggplot(draws_df) +
+    theme_classic()+
+  geom_density(aes(w2), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(w2_prior), alpha = 0.6, fill = "pink") +
+  geom_vline(xintercept = w2)
+  theme_bw()
+```
+
+## fit them to one dataset and explore data
+
+```{r}
+data1 <- read.csv("Simonsen_clean.csv", header=TRUE, stringsAsFactors=FALSE)
+subset_participant_201 <- data1[which(data1$ID==203),]
+subset_participant_201<-subset_participant_201 %>%  mutate(across(c(FirstRating, GroupRating), function(x) x/9))
+IDS <-unique(data1$ID)
+  file <- file.path("simplebayes.stan")
+  simplebayes <- cmdstan_model(file, cpp_options = list(stan_threads = TRUE),
+                                     stanc_options = list("O1"))
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# fitting simple bayes to empirical data 
+elpd_df = data.frame()
+loo_list2 = list()
+for (i in IDS){
+  df_temp <- data1 %>% 
+    filter(ID == i) %>% 
+    mutate(Source1 = FirstRating/9,
+           Source2 = GroupRating/9)
+  
+  data_list <- list(
+    N = nrow(df_temp),
+    choice = df_temp$SecondRating, # outcome of combining both information sources
+    Source1 = df_temp$Source1,
+    Source2 = df_temp$Source2
+  )
+  
+  samples <- simplebayes$sample(
+    data = data_list,
+    #fixed_param = TRUE,
+    seed = 123,
+    chains = 2,
+    parallel_chains = 2,
+    threads_per_chain = 2,
+    iter_warmup = 1500,
+    iter_sampling = 3000,
+    refresh = 500
+  )
+  
+  temp <- as_draws_df(samples$draws())
+  temp <- temp %>% 
+    mutate(ID = i)
+  a = samples$loo()
+  b = a$pointwise[, "elpd_loo"]
+
+#  loo_list2 <- c(loo_list2, b)
+  elpd_df = rbind(elpd_df, data.frame("elpd" = b))
+  if (exists("draws_df_emp")) { draws_df_emp <- rbind(draws_df_emp, temp)} 
+  else{draws_df_emp <- temp} 
+}
+print("hello")
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# fitting weighted bayes to empirical data 
+elpd_df2 = data.frame()
+loo_list = list()
+file <- file.path("weighted_bayes.stan")
+  weighted_bayes <- cmdstan_model(file, cpp_options = list(stan_threads = TRUE),
+                                     stanc_options = list("O1"))
+for (i in IDS){
+  df_temp <- data1 %>% 
+    filter(ID == i) %>% 
+    mutate(Source1 = FirstRating/9,
+           Source2 = GroupRating/9)
+  
+  data_list <- list(
+    N = nrow(df_temp),
+    choice = df_temp$SecondRating, # outcome of combining both information sources
+    Source1 = df_temp$Source1,
+    Source2 = df_temp$Source2
+  )
+  
+  samples <- weighted_bayes$sample(
+    data = data_list,
+    #fixed_param = TRUE,
+    seed = 123,
+    chains = 2,
+    parallel_chains = 2,
+    threads_per_chain = 2,
+    iter_warmup = 1500,
+    iter_sampling = 3000,
+    refresh = 500
+  )
+  
+  temp <- as_draws_df(samples$draws())
+  temp <- temp %>% 
+    mutate(ID = i)
+  a = samples$loo()
+  b = a$pointwise[, "elpd_loo"]
+
+#  loo_list2 <- c(loo_list2, b)
+  elpd_df2 = rbind(elpd_df2, data.frame("elpd" = b))
+  if (exists("draws_df_emp1")) { draws_df_emp1 <- rbind(draws_df_emp1, temp)} 
+  else{draws_df_emp1 <- temp} 
+}
+print("hello")
+```
+
+```{r}
+#draws_df_emp %>% 
+  ggplot(draws_df_emp, aes(x = bias, y = fct_reorder(as.factor(ID), bias))) +
+    geom_density_ridges() +
+   #geom_vline(xintercept = 0.3, color = "red", linetype = "dashed", size = 1) +
+    labs(title = "Distribution of Bias by ID",
+         x = "Bias",
+         y = "ID") +
+    theme_bw()
+```
+
+```{r}
+#draws_df_emp %>% 
+  ggplot(draws_df_emp1, aes(x = bias, y = fct_reorder(as.factor(ID), bias))) +
+    geom_density_ridges() +
+   #geom_vline(xintercept = 0.3, color = "red", linetype = "dashed", size = 1) +
+    labs(title = "Distribution of Bias by ID",
+         x = "Bias",
+         y = "ID") +
+    theme_bw()
+
+  ggplot(draws_df_emp1, aes(x = w1, y = fct_reorder(as.factor(ID), w1))) +
+    geom_density_ridges() +
+   #geom_vline(xintercept = 0.3, color = "red", linetype = "dashed", size = 1) +
+    labs(title = "Distribution of w1 by ID",
+         x = "w1",
+         y = "ID") +
+    theme_bw()
+  
+    ggplot(draws_df_emp1, aes(x = w2, y = fct_reorder(as.factor(ID), w2))) +
+    geom_density_ridges() +
+   #geom_vline(xintercept = 0.3, color = "red", linetype = "dashed", size = 1) +
+    labs(title = "Distribution of w2 by ID",
+         x = "w2",
+         y = "ID") +
+    theme_bw()
+```
+
+# Model comparison
+```{r}
+elpd_df_s <- elpd_df %>% 
+  rename(elpd_s = elpd)
+
+elpd_df_w <- elpd_df2 %>% 
+  rename(elpd_w = elpd)
+
+elpd_diff <- cbind(elpd_df_s, elpd_df_w)
+
+elpd_diff <- elpd_diff %>% 
+  mutate(Difference = elpd_s - elpd_w)
+
+ggplot(elpd_diff, aes(x = Difference)) +
+  geom_density()
+```
