@@ -1,0 +1,430 @@
+---
+title: "Assignment4"
+author: "Sarah Hedvig Dahl Nielsen"
+date: "2024-04-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+easypackages::libraries("tidyverse", "cmdstanr", "future", "furrr", "patchwork", "brms")
+```
+
+# Simulating data
+```{r}
+# Generate all combinations of 0s and 1s for 5 features with names
+combinations <- expand.grid(
+  eyesOnStalks = c(0, 1),
+  spots = c(0, 1),
+  slimLegs = c(0, 1),
+  armsUp = c(0, 1),
+  green = c(0, 1)
+)
+
+# Convert data frame to list of vectors, each with named elements
+list_of_combinations <- split(combinations, seq(nrow(combinations)))
+
+# Convert data frame rows to named vectors
+list_of_combinations <- lapply(list_of_combinations, as.list)
+
+stimulus <- seq(from = 1, to = 32, by = 1)
+
+experiment <- cbind(combinations,stimulus)
+
+experiment <- experiment %>% 
+  mutate(
+    Nutritious = ifelse(armsUp == 1, 1, 0)
+  )
+```
+
+```{r}
+# Distance 
+distance <- function(vect1, vect2, w) {
+  return(sum(w * abs(vect1 - vect2)))
+}
+
+# Similarity
+similarity <- function(distance, c) {
+  return(exp(-c * distance))
+}
+```
+
+```{r}
+### generative model ###
+gcm <- function(w, c, obs, cat_one, quiet = TRUE) {
+  # create an empty list to save probability of saying "1" for each trial
+  r <- c()
+  
+  ntrials <- nrow(obs)
+  
+  for (i in 1:ntrials) {
+    # If quiet is FALSE, print every ten trials
+    if (!quiet && i %% 10 == 0) {
+      print(paste("i =", i))
+    }
+    # if this is the first trial, or there any category with no exemplars seen yet, set the choice to random
+    if (i == 1 || sum(cat_one[1:(i - 1)]) == 0 || sum(cat_one[1:(i - 1)]) == (i - 1)) {
+      r <- c(r, .5)
+    } else {
+      similarities <- c()
+      # for each previously seen stimulus assess distance and similarity
+      for (e in 1:(i - 1)) {
+        sim <- similarity(distance(obs[i, ], obs[e, ], w), c)
+        similarities <- c(similarities, sim)
+      }
+      # Calculate prob of saying "1" by dividing similarity to 1 by the sum of similarity to 1 and to 2
+      numerator <- 0.5 * sum(similarities[cat_one[1:(i - 1)] == 1])
+      denominator <- 0.5 * sum(similarities[cat_one[1:(i - 1)] == 1]) + 0.5 * sum(similarities[cat_one[1:(i - 1)] == 0])
+      r <- c(r, numerator / denominator)
+    }
+  }
+
+  return(rbinom(ntrials, 1, r))
+}
+```
+
+```{r}
+# function for simulation responses
+simulate_responses <- function(agent, w, c) {
+    
+    observations <- experiment %>%
+        select(c("eyesOnStalks", "spots", "slimLegs", "armsUp", "green"))
+    
+    category <- experiment$Nutritious
+    
+    if (w == "equal") {
+        weight <- rep(1 / 5, 5)
+    } else if (w == "skewed") {
+        weight <- c(0, 0, 0, 1, 0)
+    }
+
+    # simulate responses
+    responses <- gcm(
+        weight,
+        c,
+        observations,
+        category
+    )
+    
+    tmp_simulated_responses <- experiment %>%
+        mutate(
+            trial = seq(nrow(experiment)),
+            sim_response = responses,
+            correct = ifelse(category == sim_response, 1, 0),
+            performance = cumsum(correct) / seq_along(correct),
+            c = c,
+            w = w,
+            agent = agent
+        )
+
+    return(tmp_simulated_responses)
+}
+
+
+# simulate responses
+set.seed(1998)
+
+param_df <- dplyr::tibble(
+    expand_grid(
+        agent = 1:10,
+        c = seq(.1, 2, 0.2),
+        w = c("equal", "skewed")
+    )
+)
+
+simulated_responses <- future_pmap_dfr(param_df,
+    simulate_responses,
+    .options = furrr_options(seed = TRUE)
+)
+```
+
+```{r}
+p3 <- simulated_responses %>%
+  mutate(w = as.factor(w)) %>%
+  ggplot(aes(trial, performance, group = w, color = w)) +
+  geom_smooth() +
+  theme_bw() +
+  facet_wrap(c ~ .)
+
+p4 <- simulated_responses %>%
+  mutate(c = as.factor(c)) %>%
+  ggplot(aes(trial, performance, group = c, color = c)) +
+  geom_smooth(se=F) +
+  theme_bw() +
+  facet_wrap(w ~ .)
+
+p3
+p4
+```
+
+# Fit GCM model to simulated data
+```{r}
+file <- file.path("gcm.stan")
+mod_GCM <- cmdstan_model(file, cpp_options = list(stan_threads = TRUE),
+                     stanc_options = list("O1"))
+```
+
+```{r}
+d = simulated_responses %>% 
+  filter(c == '1.3',
+         w == 'skewed')
+
+gcm_data <- list(
+  ntrials = nrow(d),
+  nfeatures = 5,
+  cat_one = d$Nutritious,
+  y = d$sim_response,
+  obs = as.matrix(d[, c("eyesOnStalks", "spots", "green", "armsUp", "slimLegs")]),
+  w_prior_values = c(1, 1, 1, 1, 1),
+  c_prior_values = c(0, 1)
+)
+
+samples_gcm <- mod_GCM$sample(
+  data = gcm_data,
+  seed = 123,
+  chains = 1,
+  parallel_chains = 1,
+  threads_per_chain = 4,
+  iter_warmup = 1000,
+  iter_sampling = 1000,
+  refresh = 500
+)
+
+obs = as.matrix(d[, c("eyesOnStalks", "spots", "green", "armsUp", "slimLegs")])
+
+```
+
+```{r}
+samples_gcm$summary()
+```
+
+```{r}
+draws_df <- as_draws_df(samples_gcm$draws())
+
+p1 <- ggplot(draws_df, aes(.iteration, c)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+p2 <- ggplot(draws_df, aes(.iteration, logit_c)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+p1+p2
+```
+
+```{r}
+p3 <- ggplot(draws_df, aes(.iteration, `w[1]`)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+p4 <- ggplot(draws_df, aes(.iteration, `w[2]`)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+p5 <- ggplot(draws_df, aes(.iteration, `w[3]`)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+p6 <- ggplot(draws_df, aes(.iteration, `w[4]`)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+p7 <- ggplot(draws_df, aes(.iteration, `w[5]`)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+(p3+p4) / (p5+p6)
+p7
+```
+
+
+```{r}
+pp1 <- ggplot(draws_df) +
+  geom_density(aes(c), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(c_prior), alpha = 0.6, fill = "pink") +
+  geom_vline(xintercept = d$c[1]) +
+  theme_bw()
+```
+
+```{r}
+pp2 <- ggplot(draws_df) +
+  geom_density(aes(`w[1]`), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(`w_prior[1]`), alpha = 0.6, fill = "pink") +
+  #geom_vline(xintercept = 0) +
+  theme_bw()
+
+pp3 <- ggplot(draws_df) +
+  geom_density(aes(`w[2]`), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(`w_prior[2]`), alpha = 0.6, fill = "pink") +
+  #geom_vline(xintercept = 0) +
+  theme_bw()
+
+pp4 <- ggplot(draws_df) +
+  geom_density(aes(`w[3]`), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(`w_prior[3]`), alpha = 0.6, fill = "pink") +
+  #geom_vline(xintercept = 0) +
+  theme_bw()
+
+pp5 <- ggplot(draws_df) +
+  geom_density(aes(`w[4]`), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(`w_prior[4]`), alpha = 0.6, fill = "pink") +
+  #geom_vline(xintercept = 1) +
+  theme_bw()
+
+pp6 <- ggplot(draws_df) +
+  geom_density(aes(`w[5]`), alpha = 0.6, fill = "lightblue") +
+  geom_density(aes(`w_prior[5]`), alpha = 0.6, fill = "pink") +
+  #geom_vline(xintercept = 0) +
+  theme_bw()
+
+(pp1+pp2+pp3)/(pp4+pp5+pp6)
+```
+
+# Fitting model to empirical data
+```{r}
+# load data
+rawDat = read.table('AlienData.txt',sep=',', header = T)
+
+empDat <- rawDat %>% 
+  filter(session == 1 & condition == 2) %>% 
+  mutate(responseN = ifelse(response == 1 | response == 3, 0, 1))
+
+empDat$stimulus = substr(empDat$stimulus, 1, nchar(empDat$stimulus)-4)
+
+empDat$eyesOnStalks <- as.numeric(substr(empDat$stimulus, 1, 1))
+empDat$spots <- as.numeric(substr(empDat$stimulus, 2, 2))
+empDat$slimLegs <- as.numeric(substr(empDat$stimulus, 3, 3))
+empDat$armsUp <- as.numeric(substr(empDat$stimulus, 4, 4))
+empDat$green <- as.numeric(substr(empDat$stimulus, 5, 5))
+```
+
+```{r}
+loo_list = c()
+
+for (i in 1:5){
+  empDat_temp <- empDat %>% 
+    filter(subject == i)
+  
+  gcm_data <- list(
+    ntrials = nrow(empDat_temp),
+    nfeatures = 5,
+    cat_one = empDat_temp$nutricious,
+    y = empDat_temp$responseN,
+    obs = as.matrix(empDat_temp[, c("eyesOnStalks", "spots", "green", "armsUp", "slimLegs")]),
+    w_prior_values = c(1, 1, 1, 1, 1),
+    c_prior_values = c(0, 1)
+  )
+
+  samples_gcm <- mod_GCM$sample(
+    data = gcm_data,
+    seed = 123,
+    chains = 1,
+    parallel_chains = 1,
+    threads_per_chain = 4,
+    iter_warmup = 1000,
+    iter_sampling = 1000,
+    refresh = 500
+  )
+    
+  loo_list = c(loo_list, samples_gcm$loo())
+  
+  temp <- as_draws_df(samples_gcm$draws())
+  temp <- temp %>% 
+    mutate(subject = i)
+  
+
+  if (exists("draws_df_emp")) { draws_df_emp <- rbind(draws_df_emp, temp)} 
+  else{draws_df_emp <- temp} 
+
+}
+```
+
+```{r}
+emp_p1 <- ggplot(draws_df_emp, aes(.iteration, c)) +
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+emp_p2 <- ggplot(draws_df_emp, aes(.iteration, logit_c)) +
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+emp_p1+emp_p2
+```
+
+```{r}
+emp_p3 <- ggplot(draws_df_emp, aes(.iteration, `w[1]`)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+emp_p4 <- ggplot(draws_df_emp, aes(.iteration, `w[2]`)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+emp_p5 <- ggplot(draws_df_emp, aes(.iteration, `w[3]`)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+emp_p6 <- ggplot(draws_df_emp, aes(.iteration, `w[4]`)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+emp_p7 <- ggplot(draws_df_emp, aes(.iteration, `w[5]`)) + 
+  geom_line(alpha = 0.5) +
+  theme_classic()
+
+(emp_p3+emp_p4) / (emp_p5 + emp_p6)
+emp_p7
+```
+
+```{r}
+library(ggridges)
+
+ggplot(draws_df_emp, aes(x = c, y = fct_reorder(as.factor(subject), c))) +
+    geom_density_ridges() +
+    labs(title = "Distribution of Scaling parameter by ID",
+         x = "c",
+         y = "ID") +
+    theme_bw()
+```
+
+```{r}
+ggplot(draws_df_emp, aes(x = `w[1]`, y = fct_reorder(as.factor(subject), `w[1]`))) +
+    geom_density_ridges() +
+    labs(title = "Distribution of weight 1 parameter by ID",
+         x = "weight 1",
+         y = "ID") +
+    theme_bw()
+```
+```{r}
+ggplot(draws_df_emp, aes(x = `w[2]`, y = fct_reorder(as.factor(subject), `w[2]`))) +
+    geom_density_ridges() +
+    labs(title = "Distribution of weight 2 parameter by ID",
+         x = "weight 2",
+         y = "ID") +
+    theme_bw()
+```
+```{r}
+ggplot(draws_df_emp, aes(x = `w[3]`, y = fct_reorder(as.factor(subject), `w[3]`))) +
+    geom_density_ridges() +
+    labs(title = "Distribution of weight 3 parameter by ID",
+         x = "weight 3",
+         y = "ID") +
+    theme_bw()
+```
+
+```{r}
+ggplot(draws_df_emp, aes(x = `w[4]`, y = fct_reorder(as.factor(subject), `w[4]`))) +
+    geom_density_ridges() +
+    labs(title = "Distribution of weight 4 parameter by ID",
+         x = "weight 4",
+         y = "ID") +
+    theme_bw()
+```
+
+```{r}
+ggplot(draws_df_emp, aes(x = `w[5]`, y = fct_reorder(as.factor(subject), `w[5]`))) +
+    geom_density_ridges() +
+    labs(title = "Distribution of weight 5 parameter by ID",
+         x = "weight 5",
+         y = "ID") +
+    theme_bw()
+```
