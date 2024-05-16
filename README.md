@@ -2,17 +2,18 @@
 
 Authors:
 
-Anja
+Anja Meerwald | 202008898
 
-Anna Hedvig Møller Daugaard - 201908918
+Anna Hedvig Møller Daugaard | 201908918
 
-Astrid Elmann Hansen - 202006712
+Astrid Elmann Hansen | 202006712
 
-Gabriela
+Gabriela Stachyra | 202202799
 
-Sarah Hedvig Dahl Nielsen - 201907169
+Sarah Hedvig Dahl Nielsen | 201907169
 
-Sille
+Sille Hasselbalch Markussen| 202006969
+
 
 
 
