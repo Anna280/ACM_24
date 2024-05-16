@@ -22,7 +22,7 @@ Sille
 **Assignment 3:** https://github.com/Anna280/ACM_24/tree/main/Portfolio3
   
 -  Stan for assignment 3:   https://github.com/Anna280/ACM_24/blob/main/Portfolio3/simplebayes.stan
-                            https://github.com/Anna280/ACM_24/blob/main/Portfolio3/weighted_bayes.stan 
+-                           https://github.com/Anna280/ACM_24/blob/main/Portfolio3/weighted_bayes.stan 
 
                            
 **Assignment 4:** https://github.com/Anna280/ACM_24/blob/main/Assignment%204/Assignment4.Rmd 
